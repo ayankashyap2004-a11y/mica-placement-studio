@@ -1,14 +1,11 @@
 import streamlit as st
 import os
-
-try:
-    import google.generativeai as genai
-    HAS_GENAI = True
-except ImportError:
-    HAS_GENAI = False
+import json
+import urllib.request
+import urllib.error
 
 st.set_page_config(
-    page_title="MICA Placement Studio",
+    page_title="MICA Placement Studio | Final Interview Simulator",
     page_icon="🎯",
     layout="wide"
 )
@@ -20,6 +17,37 @@ st.markdown("""
     .stChatMessage { border-radius: 12px; margin-bottom: 12px; }
 </style>
 """, unsafe_allow_html=True)
+
+# Direct HTTPS call to Gemini REST API (zero SDK deprecation issues)
+def query_gemini(api_key, prompt, model_name="gemini-1.5-flash"):
+    if not api_key:
+        return None, "No API key provided."
+    
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key.strip()}"
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 800
+        }
+    }
+    
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=25) as response:
+            res_json = json.loads(response.read().decode("utf-8"))
+            text = res_json["candidates"][0]["content"]["parts"][0]["text"]
+            return text, None
+    except urllib.error.HTTPError as e:
+        err_msg = e.read().decode("utf-8")
+        try:
+            err_json = json.loads(err_msg)
+            return None, err_json.get("error", {}).get("message", str(e))
+        except Exception:
+            return None, f"HTTP Error {e.code}: {e.reason}"
+    except Exception as e:
+        return None, str(e)
 
 # Master Cases Database with Benchmark Model Answers
 CASES = {
@@ -125,10 +153,13 @@ def get_or_create_case_session(case_id):
         case_data = CASES[case_id]
         st.session_state.sessions_db[case_id] = {
             "current_turn": 1,
+            "awaiting_rebuttal": False,
             "completed": False,
+            "dynamic_scorecard": None,
             "history": [
                 {
                     "role": "panelist",
+                    "type": "opening",
                     "turn": 1,
                     "panelist": case_data["panelists"][case_data["turns"][0]["panelist_idx"]]["name"],
                     "panelist_title": case_data["panelists"][case_data["turns"][0]["panelist_idx"]]["role"],
@@ -138,13 +169,17 @@ def get_or_create_case_session(case_id):
         }
     return st.session_state.sessions_db[case_id]
 
-# Sidebar Controls & Case Catalog
+# Sidebar
 st.sidebar.title("🎯 MICA Studio")
 st.sidebar.caption("Executive Placement Interview Simulator")
 
-# Read key from Streamlit Secrets if available, otherwise allow sidebar entry
 secret_key = st.secrets.get("GEMINI_API_KEY", "") if hasattr(st, "secrets") else ""
-api_key = st.sidebar.text_input("Gemini API Key (Optional)", value=secret_key, type="password", help="Enter free key from Google AI Studio to enable live, adaptive cross-examination.")
+api_key = st.sidebar.text_input("Gemini API Key", value=secret_key, type="password", help="Enter free API key from Google AI Studio (aistudio.google.com).")
+
+if api_key:
+    st.sidebar.success("⚡ Live AI Active")
+else:
+    st.sidebar.warning("⚠️ Enter API key to activate live cross-examination")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Case Repository")
@@ -155,9 +190,9 @@ for cid, cdata in CASES.items():
     if s_obj:
         status_str = "Completed" if s_obj["completed"] else f"Turn {s_obj['current_turn']}/5"
     
-    col_btn, col_stat = st.sidebar.columns([3, 2])
+    col_btn, col_stat = st.sidebar.columns()
     with col_btn:
-        if st.button(f"{cdata['company']}", key=f"btn_{cid}", use_container_width=True):
+        if st.sidebar.button(f"{cdata['company']}", key=f"btn_{cid}", use_container_width=True):
             st.session_state.current_case_id = cid
             st.rerun()
     with col_stat:
@@ -184,88 +219,187 @@ st.subheader("Interview Floor")
 for item in active_session["history"]:
     if item["role"] == "panelist":
         with st.chat_message("assistant", avatar="👔"):
-            st.markdown(f"**{item['panelist']}** *({item['panelist_title']})* — `Turn {item['turn']}`")
+            tag = "Cross-Examination Pushback" if item.get("type") == "cross_exam" else f"Turn {item['turn']}"
+            st.markdown(f"**{item['panelist']}** *({item['panelist_title']})* — `{tag}`")
             st.write(item["text"])
     else:
         with st.chat_message("user", avatar="🎓"):
             st.markdown(f"**Ayan Kashyap (Candidate)** — `Turn {item['turn']}`")
             st.write(item["text"])
 
-# Active Turn Input Dock
+# Active Interaction Dock
 if not active_session["completed"]:
     st.markdown("---")
-    candidate_answer = st.text_area(
-        f"Your Response to Turn {active_session['current_turn']} of 5:",
-        placeholder="Structure your answer (e.g., state hypothesis first, back with economics & Superyou learnings)...",
+    cur_turn = active_session["current_turn"]
+    
+    if active_session["awaiting_rebuttal"]:
+        label = f"Your Rebuttal / Clarification to the Panelist's Pushback (Turn {cur_turn}):"
+        btn_label = "Submit Rebuttal ↵"
+    else:
+        label = f"Your Structured Answer to Turn {cur_turn} of 5:"
+        btn_label = "Submit Answer ↵"
+
+    candidate_input = st.text_area(
+        label,
+        placeholder="Type your response here...",
         height=130,
-        key=f"input_{st.session_state.current_case_id}_{active_session['current_turn']}"
+        key=f"input_{st.session_state.current_case_id}_{cur_turn}_{active_session['awaiting_rebuttal']}"
     )
 
-    if st.button("Submit Turn ↵", type="primary"):
-        if candidate_answer.strip():
-            cur_turn = active_session["current_turn"]
-            active_session["history"].append({
-                "role": "candidate",
-                "turn": cur_turn,
-                "text": candidate_answer.strip()
-            })
+    col_sub, col_end = st.columns()
+    with col_sub:
+        if st.button(btn_label, type="primary"):
+            if candidate_input.strip():
+                ans_clean = candidate_input.strip()
+                active_session["history"].append({
+                    "role": "candidate",
+                    "turn": cur_turn,
+                    "text": ans_clean
+                })
 
-            # Real-time Gemini Cross-Examination
-            cross_exam_text = ""
-            if api_key and HAS_GENAI:
-                try:
-                    genai.configure(api_key=api_key)
-                    model = genai.GenerativeModel("gemini-1.5-flash")
+                if not active_session["awaiting_rebuttal"]:
+                    # Stage A: Generate live cross-examination
                     turn_data = current_case["turns"][cur_turn - 1]
                     panelist_data = current_case["panelists"][turn_data["panelist_idx"]]
                     
-                    sys_prompt = f"You are roleplaying as {panelist_data['name']}, {panelist_data['role']} at {current_case['company']} on a tough MICA placement interview panel for Ayan Kashyap (BSc Economics, Superyou D2C growth internship).\nRead his answer to '{turn_data['question']}':\n\"{candidate_answer}\"\nIn 2-3 sentences, identify one weak assumption or trade-off in his response and ask a sharp cross-examination follow-up. Stay in character."
-                    res = model.generate_content(sys_prompt)
-                    cross_exam_text = res.text
-                except Exception:
-                    cross_exam_text = ""
+                    cross_exam_done = False
+                    if api_key:
+                        with st.spinner(f"{panelist_data['name']} is evaluating your response..."):
+                            prompt = f"""You are roleplaying as {panelist_data['name']}, {panelist_data['role']} at {current_case['company']} on a strict MICA final placement interview panel for candidate Ayan Kashyap (BSc Economics, Superyou D2C growth internship).
+Category Context: {current_case['context']}
+The Question Asked: "{turn_data['question']}"
+Candidate's Exact Response: "{ans_clean}"
 
-            if cross_exam_text:
-                active_session["history"].append({
-                    "role": "panelist",
-                    "turn": cur_turn,
-                    "panelist": panelist_data["name"],
-                    "panelist_title": panelist_data["role"],
-                    "text": f"**Cross-Examination Pushback:**\n{cross_exam_text}"
-                })
+Task:
+1. Identify the most critical flaw, unaddressed commercial reality, or weak assumption in the candidate's answer (e.g. if they say 'what?' or give a vague answer, call them out immediately; if they give numbers, challenge the margin or ROI; if theoretical, challenge implementation).
+2. Deliver a sharp, aggressive in-character cross-examination follow-up in 2 to 3 sentences. Address him as Ayan.
+Do NOT reveal the model answer. Challenge him directly now:"""
 
-            if cur_turn < len(current_case["turns"]):
-                next_turn_data = current_case["turns"][cur_turn]
-                next_panelist = current_case["panelists"][next_turn_data["panelist_idx"]]
-                active_session["current_turn"] = cur_turn + 1
-                active_session["history"].append({
-                    "role": "panelist",
-                    "turn": cur_turn + 1,
-                    "panelist": next_panelist["name"],
-                    "panelist_title": next_panelist["role"],
-                    "text": next_turn_data["question"]
-                })
-            else:
-                active_session["completed"] = True
+                            reply, err = query_gemini(api_key, prompt)
+                            if reply and not err:
+                                active_session["history"].append({
+                                    "role": "panelist",
+                                    "type": "cross_exam",
+                                    "turn": cur_turn,
+                                    "panelist": panelist_data["name"],
+                                    "panelist_title": panelist_data["role"],
+                                    "text": reply
+                                })
+                                active_session["awaiting_rebuttal"] = True
+                                cross_exam_done = True
+                            elif err:
+                                st.error(f"Gemini API Error: {err}")
 
+                    if not cross_exam_done:
+                        if cur_turn < len(current_case["turns"]):
+                            next_t = current_case["turns"][cur_turn]
+                            next_p = current_case["panelists"][next_t["panelist_idx"]]
+                            active_session["current_turn"] = cur_turn + 1
+                            active_session["history"].append({
+                                "role": "panelist",
+                                "type": "opening",
+                                "turn": cur_turn + 1,
+                                "panelist": next_p["name"],
+                                "panelist_title": next_p["role"],
+                                "text": next_t["question"]
+                            })
+                        else:
+                            active_session["completed"] = True
+                    st.rerun()
+
+                else:
+                    # Stage B: Candidate gave rebuttal, advance to next turn!
+                    active_session["awaiting_rebuttal"] = False
+                    if cur_turn < len(current_case["turns"]):
+                        next_t = current_case["turns"][cur_turn]
+                        next_p = current_case["panelists"][next_t["panelist_idx"]]
+                        active_session["current_turn"] = cur_turn + 1
+                        active_session["history"].append({
+                            "role": "panelist",
+                            "type": "opening",
+                            "turn": cur_turn + 1,
+                            "panelist": next_p["name"],
+                            "panelist_title": next_p["role"],
+                            "text": next_t["question"]
+                        })
+                    else:
+                        active_session["completed"] = True
+                    st.rerun()
+
+    with col_end:
+        if st.button("End & Score Early"):
+            active_session["completed"] = True
             st.rerun()
 
-# Completed Scorecard & Model Benchmark Answers
+# Dynamic Scorecard Generation
 if active_session["completed"]:
-    st.success("🎉 Interview Session Concluded! Review your evaluation scorecard and benchmark answers below.")
-    
-    st.subheader("📊 Evaluation Scorecard (40-Point Placement Rubric)")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Structured Problem Solving", "8.5 / 10")
-    c2.metric("Commercial Acumen & P&L", "8.0 / 10")
-    c3.metric("Channel Intuition (GT/Q-Comm)", "7.5 / 10")
-    c4.metric("Narrative & Presence", "8.5 / 10")
-    
+    st.success("🎉 Interview Session Concluded! Evaluating your performance across the 40-point rubric.")
+
+    if active_session["dynamic_scorecard"] is None:
+        if api_key:
+            with st.spinner("Panel is deliberating and scoring your actual answers..."):
+                transcript = ""
+                for h in active_session["history"]:
+                    speaker = h.get("panelist", "Ayan Kashyap (Candidate)")
+                    transcript += f"[{speaker}]: {h['text']}\n\n"
+
+                eval_prompt = f"""You are the senior MICA placement interview panel evaluating candidate Ayan Kashyap for an FMCG/D2C Management Trainee role at {current_case['company']}.
+Here is the verbatim transcript of the candidate's actual answers during the interview:
+{transcript}
+
+Analyze the candidate's performance rigorously and realistically based strictly on what they said above. If the candidate gave poor, short (e.g. 'what?'), or unprepared answers, assign realistic low scores (e.g. 1.0 - 4.0). If they provided structured, nuanced answers, assign appropriate scores (e.g. 7.0 - 9.5).
+
+Return ONLY a valid JSON object matching this exact schema:
+{{
+  "problem_solving": 0.0,
+  "problem_solving_feedback": "...",
+  "commercial_acumen": 0.0,
+  "commercial_feedback": "...",
+  "channel_intuition": 0.0,
+  "channel_feedback": "...",
+  "narrative_presence": 0.0,
+  "narrative_feedback": "...",
+  "executive_synthesis": "...",
+  "missed_tradeoffs": "...",
+  "verdict": "Strong Hire / Hire / Borderline / Reject"
+}}"""
+                eval_res, err = query_gemini(api_key, eval_prompt)
+                if eval_res and not err:
+                    try:
+                        clean_json = eval_res.strip().replace("```json", "").replace("```", "")
+                        active_session["dynamic_scorecard"] = json.loads(clean_json)
+                    except Exception:
+                        active_session["dynamic_scorecard"] = None
+
+    sc = active_session["dynamic_scorecard"]
+    st.subheader("📊 Dynamic Placement Scorecard")
+
+    if sc:
+        total_score = sc.get("problem_solving", 0) + sc.get("commercial_acumen", 0) + sc.get("channel_intuition", 0) + sc.get("narrative_presence", 0)
+        st.markdown(f"**Verdict:** `{sc.get('verdict', 'Evaluated')}` | **Total Score: {total_score:.1f} / 40.0**")
+        
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Problem Solving", f"{sc.get('problem_solving', 0):.1f} / 10")
+        c2.metric("Commercial Acumen", f"{sc.get('commercial_acumen', 0):.1f} / 10")
+        c3.metric("Channel Intuition", f"{sc.get('channel_intuition', 0):.1f} / 10")
+        c4.metric("Narrative & Presence", f"{sc.get('narrative_presence', 0):.1f} / 10")
+
+        with st.expander("📝 Granular Qualitative Debrief (Based on Your Actual Answers)", expanded=True):
+            st.markdown(f"**Problem Solving Feedback:** {sc.get('problem_solving_feedback', '')}")
+            st.markdown(f"**Commercial Acumen Feedback:** {sc.get('commercial_feedback', '')}")
+            st.markdown(f"**Channel Intuition Feedback:** {sc.get('channel_feedback', '')}")
+            st.markdown(f"**Narrative Feedback:** {sc.get('narrative_feedback', '')}")
+            st.markdown(f"**Executive Synthesis:** {sc.get('executive_synthesis', '')}")
+            st.markdown(f"**Missed Trade-Offs:** {sc.get('missed_tradeoffs', '')}")
+    else:
+        st.info("Dynamic scoring requires an active Gemini API key. Enter your key in the sidebar to generate an AI evaluation of your actual responses.")
+
+    # Benchmark Model Answers
     st.markdown("### 📘 Turn-by-Turn Benchmark Model Answers")
     for t in current_case["turns"]:
         p_name = current_case["panelists"][t["panelist_idx"]]["name"]
         p_role = current_case["panelists"][t["panelist_idx"]]["role"]
-        with st.expander(f"Turn {t['turn']} Benchmark | {p_name} ({p_role})", expanded=True):
+        with st.expander(f"Turn {t['turn']} Benchmark | {p_name} ({p_role})", expanded=False):
             st.markdown(f"**Question:** *\"{t['question']}\"*")
             st.markdown(f"**Benchmark Model Answer:**\n{t['model_answer']}")
 
