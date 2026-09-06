@@ -10,13 +10,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# ==========================================
-# OPTION TO HARDCODE YOUR API KEY HERE:
-# Paste your 39-character key between the quotes if you want it always connected.
-# Example: HARDCODED_API_KEY = "AIzaSy..."
-# ==========================================
-
-
 # Custom Styling
 st.markdown("""
 <style>
@@ -25,7 +18,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Bulletproof HTTPS call testing both v1 (GA) and v1beta (Beta) with all active models
+# Bulletproof HTTPS call testing both v1 (GA) and v1beta (Beta) with active models
 def query_gemini(api_key, prompt):
     if not api_key:
         return None, "No API key provided."
@@ -44,15 +37,13 @@ def query_gemini(api_key, prompt):
     }
     data = json.dumps(payload).encode("utf-8")
     
-    # Sequence testing both GA (v1) and Beta (v1beta) across standard models
     attempts = [
         ("v1beta", "gemini-2.0-flash"),
         ("v1", "gemini-2.0-flash"),
         ("v1beta", "gemini-2.5-flash"),
         ("v1", "gemini-1.5-flash"),
         ("v1beta", "gemini-1.5-flash"),
-        ("v1", "gemini-1.5-pro"),
-        ("v1beta", "gemini-pro")
+        ("v1", "gemini-1.5-pro")
     ]
     
     last_err = None
@@ -63,7 +54,6 @@ def query_gemini(api_key, prompt):
             with urllib.request.urlopen(req, timeout=20) as response:
                 res_json = json.loads(response.read().decode("utf-8"))
                 text = res_json["candidates"][0]["content"]["parts"][0]["text"]
-                st.session_state.connected_model = f"{api_ver}/{model_name}"
                 return text, None
         except urllib.error.HTTPError as e:
             err_msg = e.read().decode("utf-8")
@@ -202,25 +192,21 @@ def get_or_create_case_session(case_id):
         }
     return st.session_state.sessions_db[case_id]
 
-# Resolve API Key Priority: 1) Hardcoded, 2) Streamlit Secrets, 3) Sidebar Input
-resolved_key = HARDCODED_API_KEY.strip()
-if not resolved_key and hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
-    resolved_key = st.secrets["GEMINI_API_KEY"].strip()
-
 # Sidebar
 st.sidebar.title("🎯 MICA Studio")
 st.sidebar.caption("Executive Placement Interview Simulator")
 
-if resolved_key:
-    api_key = resolved_key
-    connected_info = st.session_state.get("connected_model", "Connected")
-    st.sidebar.success(f"⚡ Live AI Active ({connected_info})")
+# Read from Secrets if configured, otherwise sidebar input
+secret_val = ""
+if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
+    secret_val = st.secrets["GEMINI_API_KEY"].strip()
+
+api_key = st.sidebar.text_input("Gemini API Key", value=secret_val, type="password", help="Enter key from Google AI Studio (aistudio.google.com).")
+
+if api_key:
+    st.sidebar.success("⚡ Live AI Ready")
 else:
-    api_key = st.sidebar.text_input("Gemini API Key", type="password", help="Enter key from Google AI Studio (aistudio.google.com).")
-    if api_key:
-        st.sidebar.success("⚡ Key Entered")
-    else:
-        st.sidebar.warning("⚠️ Enter key or hardcode in app.py")
+    st.sidebar.warning("⚠️ Enter API key to activate live cross-examination")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Case Repository")
