@@ -18,10 +18,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Bulletproof HTTPS call testing v1 and v1beta across Google models
+# Direct HTTPS call targeting active Google Gemini production models (Gemini 3.8 / 3.5 / 2.0)
 def query_gemini(api_key, prompt):
     if not api_key:
-        return None, "No API key provided."
+        return None, "No API key provided. Please enter your Gemini API key in the sidebar."
     
     clean_key = api_key.strip()
     headers = {
@@ -31,29 +31,28 @@ def query_gemini(api_key, prompt):
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
-            "temperature": 0.7,
             "maxOutputTokens": 800
         }
     }
     data = json.dumps(payload).encode("utf-8")
     
-    attempts = [
-        ("v1beta", "gemini-2.5-flash"),
-        ("v1beta", "gemini-2.0-flash"),
-        ("v1", "gemini-2.0-flash"),
-        ("v1beta", "gemini-1.5-flash"),
-        ("v1", "gemini-1.5-flash"),
-        ("v1", "gemini-1.5-pro")
+    # Active production models in Google's API
+    active_models = [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash",
+        "gemini-3.7-flash",
+        "gemini-2.0-flash"
     ]
     
     last_err = None
-    for api_ver, model_name in attempts:
-        url = f"https://generativelanguage.googleapis.com/{api_ver}/models/{model_name}:generateContent?key={clean_key}"
+    for model_name in active_models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={clean_key}"
         req = urllib.request.Request(url, data=data, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=15) as response:
+            with urllib.request.urlopen(req, timeout=20) as response:
                 res_json = json.loads(response.read().decode("utf-8"))
                 text = res_json["candidates"][0]["content"]["parts"][0]["text"]
+                st.session_state.connected_model = model_name
                 return text, None
         except urllib.error.HTTPError as e:
             err_msg = e.read().decode("utf-8")
@@ -71,100 +70,6 @@ def query_gemini(api_key, prompt):
             continue
             
     return None, last_err
-
-# Guaranteed In-App Adaptive Cross-Examination Engine
-def get_guaranteed_cross_exam(panelist, question, answer, company):
-    ans_lower = answer.lower().strip()
-    words = ans_lower.split()
-    
-    # Check for short, deflected, or repetitive answers
-    if len(words) < 8 or any(w in ans_lower for w in ["repeat", "what", "pardon", "don't know", "idk", "huh"]):
-        return (
-            f"Ayan, in a final placement interview at {company}, asking to repeat or deflecting with a single-phrase answer "
-            "immediately raises a red flag with the panel. "
-            f"I specifically asked you: \"{question}\" "
-            "Take a deep breath, commit to a clear commercial stance, and give me a structured 3-part answer."
-        )
-    
-    # Domain-specific sharp pushback
-    role = panelist.get("role", "")
-    if "HR" in role or "Talent" in role:
-        return (
-            "Ayan, your answer sounds diplomatic, but you're evading the core friction. "
-            "When an acquired D2C brand's founder insists on an aggressive growth campaign that directly violates "
-            f"{company}'s corporate brand governance guidelines, do you back the founder's growth momentum or enforce corporate compliance? "
-            "Give me a definitive decision and defend the trade-off."
-        )
-    elif "Finance" in role or "Commercial" in role:
-        return (
-            "You addressed gross margins, but you completely glossed over working capital velocity. "
-            "In Modern Trade, payment cycles run 60 to 90 days, and supermarket chains demand heavy slotting allowances. "
-            "If your weekly off-take is below 4 units per store, your ROCE turns deeply negative. "
-            "How do you justify this working capital drag to the CFO?"
-        )
-    elif "Category" in role or "Brand" in role:
-        return (
-            "Your cohort segmentation sounds clean on a slide, but real consumers in retail aisles don't read brand decks. "
-            "If our clean-label premium product sits on the exact same shelf as our legacy mass-market SKU, "
-            "what prevents the consumer from buying the cheaper pack and cannibalizing our high-margin revenue? "
-            "Where is the physical point-of-sale barrier?"
-        )
-    else:  # Sales & Customer Development
-        return (
-            "Let's ground this in the field. An FMCG distributor in Kanpur or Indore operates on cash-flow turnover. "
-            "Parachute turns over in 4 days, while your premium health mix sits in their godown for 40 days. "
-            "Why should that distributor deploy their working capital and salesmen to push your slow-moving SKU? "
-            "What exact ROI parity are you offering them?"
-        )
-
-# Fallback heuristic evaluator if API is unavailable
-def evaluate_heuristically(history, company):
-    candidate_answers = [h["text"] for h in history if h.get("role") == "candidate"]
-    all_text = " ".join(candidate_answers).lower()
-    total_words = len(all_text.split())
-    
-    if total_words < 15 or ("what" in all_text and total_words < 25):
-        return {
-            "problem_solving": 2.0,
-            "problem_solving_feedback": "Candidate provided minimal or single-word responses with zero structured framework.",
-            "commercial_acumen": 1.5,
-            "commercial_feedback": "No unit economics, trade margins, or financial reasoning demonstrated.",
-            "channel_intuition": 1.5,
-            "channel_feedback": "Failed to engage with General Trade or Modern Trade realities.",
-            "narrative_presence": 2.0,
-            "narrative_feedback": "Showed low engagement and lack of preparation for an executive panel.",
-            "executive_synthesis": "The candidate was unresponsive to core commercial questions and did not meet interview standards.",
-            "missed_tradeoffs": "Entire operational and channel strategy was unaddressed.",
-            "verdict": "Reject"
-        }
-    
-    ps_score = 7.5
-    ca_score = 7.0
-    ci_score = 7.0
-    np_score = 8.0
-    
-    if any(w in all_text for w in ["mece", "hypothesis", "framework", "stage-gate", "decouple"]):
-        ps_score += 1.0
-    if any(w in all_text for w in ["margin", "cac", "roce", "p&l", "cogs", "contribution"]):
-        ca_score += 1.2
-    if any(w in all_text for w in ["general trade", "distributor", "kirana", "quick commerce", "modern trade", "blinkit"]):
-        ci_score += 1.2
-    if any(w in all_text for w in ["economics", "superyou", "elasticity", "stewardship"]):
-        np_score += 1.0
-        
-    return {
-        "problem_solving": min(9.5, ps_score),
-        "problem_solving_feedback": "Solid structural decomposition with clear reasoning across prompts.",
-        "commercial_acumen": min(9.5, ca_score),
-        "commercial_feedback": "Demonstrated understanding of contribution margins, brand unit economics, and trade take.",
-        "channel_intuition": min(9.5, ci_score),
-        "channel_feedback": "Addressed General Trade working capital velocity and channel conflict dynamics.",
-        "narrative_presence": min(9.5, np_score),
-        "narrative_feedback": "Articulate delivery connecting academic economics with D2C internship experience.",
-        "executive_synthesis": f"Strong candidate demonstrating sound commercial instinct suitable for a Management Trainee track at {company}.",
-        "missed_tradeoffs": "Ensure you explicitly calculate distributor ROI parity when introducing premium SKUs into traditional kiranas.",
-        "verdict": "Strong Hire" if (ps_score + ca_score + ci_score + np_score) >= 32 else "Hire"
-    }
 
 # Master Cases Database
 CASES = {
@@ -294,12 +199,13 @@ secret_val = ""
 if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
     secret_val = st.secrets["GEMINI_API_KEY"].strip()
 
-api_key = st.sidebar.text_input("Gemini API Key", value=secret_val, type="password", help="Enter key from Google AI Studio.")
+api_key = st.sidebar.text_input("Gemini API Key", value=secret_val, type="password", help="Enter free key from Google AI Studio (aistudio.google.com).")
 
 if api_key:
-    st.sidebar.success("⚡ Live AI Ready")
+    conn_m = st.session_state.get("connected_model", "Gemini 3.8 Flash")
+    st.sidebar.success(f"⚡ Live AI Connected ({conn_m})")
 else:
-    st.sidebar.info("💡 Guided Mode Active (Live AI optional)")
+    st.sidebar.warning("⚠️ Enter Gemini API Key to enable live interview panel")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Case Repository")
@@ -372,38 +278,43 @@ if not active_session["completed"]:
             })
 
             if not active_session["awaiting_rebuttal"]:
-                # STAGE A: Cross-Examination Pushback
+                # STAGE A: Pure AI Cross-Examination (No Hardcoded Fallbacks!)
                 turn_data = current_case["turns"][cur_turn - 1]
                 panelist_data = current_case["panelists"][turn_data["panelist_idx"]]
                 
-                cross_pushback = None
-                if api_key:
-                    with st.spinner(f"{panelist_data['name']} is evaluating your response..."):
-                        prompt = f"""You are {panelist_data['name']}, {panelist_data['role']} at {current_case['company']} on a strict MICA placement panel.
-Question: "{turn_data['question']}"
-Candidate Answer: "{ans_clean}"
-In 2-3 sentences, identify one weak assumption or missing trade-off in his response and cross-examine him directly. Stay in character."""
-                        reply, err = query_gemini(api_key, prompt)
-                        if reply and not err:
-                            cross_pushback = reply
+                prompt = f"""You are roleplaying as {panelist_data['name']}, {panelist_data['role']} at {current_case['company']} on a strict, realistic MICA final placement interview panel for candidate Ayan Kashyap (BSc Economics, Superyou D2C growth internship).
+Category Context: {current_case['context']}
+The Question You Asked: "{turn_data['question']}"
+Candidate's Verbatim Response: "{ans_clean}"
 
-                # Guaranteed Fallback Pushback if API is missing or fails
-                if not cross_pushback:
-                    cross_pushback = get_guaranteed_cross_exam(panelist_data, turn_data["question"], ans_clean, current_case["company"])
+INSTRUCTIONS FOR CROSS-EXAMINATION:
+1. Read the candidate's exact reply carefully. Address what he specifically said or did not say.
+2. If the candidate wrote something casual, defensive, dismissive, or said he is not interested (e.g. 'Hey Aditya I am not interested', 'what?', or asking to repeat), immediately call him out in character for his attitude, question his seriousness for this corporate role at {current_case['company']}, and press him on why he shouldn't be rejected on the spot.
+3. If the candidate gave a substantive answer, identify one specific commercial flaw, unaddressed trade-off, or aggressive assumption in what he said, and challenge him with a sharp 2 to 3 sentence cross-examination follow-up.
+Stay completely in character as {panelist_data['name']}. Address him as Ayan.
+Deliver your sharp cross-examination response now:"""
 
-                active_session["history"].append({
-                    "role": "panelist",
-                    "type": "cross_exam",
-                    "turn": cur_turn,
-                    "panelist": panelist_data["name"],
-                    "panelist_title": panelist_data["role"],
-                    "text": cross_pushback
-                })
-                active_session["awaiting_rebuttal"] = True
-                st.rerun()
+                with st.spinner(f"{panelist_data['name']} is evaluating what you wrote..."):
+                    reply, err = query_gemini(api_key, prompt)
+
+                if err:
+                    st.error(f"Google Gemini API Error: {err}")
+                    st.stop()
+
+                if reply:
+                    active_session["history"].append({
+                        "role": "panelist",
+                        "type": "cross_exam",
+                        "turn": cur_turn,
+                        "panelist": panelist_data["name"],
+                        "panelist_title": panelist_data["role"],
+                        "text": reply
+                    })
+                    active_session["awaiting_rebuttal"] = True
+                    st.rerun()
 
             else:
-                # STAGE B: Candidate gave rebuttal, now advance to next turn!
+                # STAGE B: Candidate provided rebuttal, now advance to next turn!
                 active_session["awaiting_rebuttal"] = False
                 if cur_turn < len(current_case["turns"]):
                     next_t = current_case["turns"][cur_turn]
@@ -432,28 +343,27 @@ if active_session["completed"]:
 
     col_eval_btn, col_rst_btn = st.columns(2)
     with col_eval_btn:
-        trigger_eval = st.button("📊 Recalculate Scorecard", type="primary", use_container_width=True)
+        trigger_eval = st.button("📊 Recalculate AI Scorecard", type="primary", use_container_width=True)
     with col_rst_btn:
         if st.button("↺ Restart This Case (Back to Turn 1)", use_container_width=True):
             st.session_state.sessions_db[st.session_state.current_case_id] = None
             get_or_create_case_session(st.session_state.current_case_id)
             st.rerun()
 
-    # Dynamic Scoring with Guaranteed Evaluation
+    # Dynamic Scoring with Pure AI
     if trigger_eval or active_session["dynamic_scorecard"] is None:
-        sc_result = None
-        if api_key:
-            with st.spinner("Panel is deliberating..."):
-                transcript = ""
-                for h in active_session["history"]:
-                    speaker = h.get("panelist", "Ayan Kashyap (Candidate)")
-                    transcript += f"[{speaker}]: {h['text']}\n\n"
+        transcript = ""
+        for h in active_session["history"]:
+            speaker = h.get("panelist", "Ayan Kashyap (Candidate)")
+            transcript += f"[{speaker}]: {h['text']}\n\n"
 
-                eval_prompt = f"""You are the senior MICA placement panel evaluating candidate Ayan Kashyap for an FMCG/D2C Management Trainee role at {current_case['company']}.
-Transcript:
+        eval_prompt = f"""You are the senior MICA placement panel evaluating candidate Ayan Kashyap for an FMCG/D2C Management Trainee role at {current_case['company']}.
+Here is the verbatim transcript of the candidate's actual answers during the interview:
 {transcript}
 
-Return ONLY a valid JSON object matching:
+Analyze the candidate's performance rigorously and realistically based strictly on what they said above. If the candidate gave poor, short, dismissive (e.g. 'not interested', 'what?'), or unprepared answers, assign realistic low scores (e.g. 1.0 - 3.5). If they provided structured, nuanced answers, assign appropriate scores (e.g. 7.0 - 9.5).
+
+Return ONLY a valid JSON object matching this exact schema:
 {{
   "problem_solving": 0.0,
   "problem_solving_feedback": "...",
@@ -467,18 +377,19 @@ Return ONLY a valid JSON object matching:
   "missed_tradeoffs": "...",
   "verdict": "Strong Hire / Hire / Borderline / Reject"
 }}"""
-                eval_res, err = query_gemini(api_key, eval_prompt)
-                if eval_res and not err:
-                    try:
-                        clean_json = eval_res.strip().replace("```json", "").replace("```", "")
-                        sc_result = json.loads(clean_json)
-                    except Exception:
-                        sc_result = None
+        with st.spinner("Panel is deliberating on your transcript..."):
+            eval_res, err = query_gemini(api_key, eval_prompt)
 
-        if not sc_result:
-            sc_result = evaluate_heuristically(active_session["history"], current_case["company"])
-        
-        active_session["dynamic_scorecard"] = sc_result
+        if err:
+            st.error(f"Google Gemini Scoring Error: {err}")
+            st.stop()
+
+        if eval_res:
+            try:
+                clean_json = eval_res.strip().replace("```json", "").replace("```", "")
+                active_session["dynamic_scorecard"] = json.loads(clean_json)
+            except Exception as ex:
+                st.error(f"Failed to parse scorecard JSON: {ex}")
 
     sc = active_session["dynamic_scorecard"]
     if sc:
@@ -491,7 +402,7 @@ Return ONLY a valid JSON object matching:
         c3.metric("Channel Intuition", f"{sc.get('channel_intuition', 0):.1f} / 10")
         c4.metric("Narrative & Presence", f"{sc.get('narrative_presence', 0):.1f} / 10")
 
-        with st.expander("📝 Granular Qualitative Debrief", expanded=True):
+        with st.expander("📝 Granular Qualitative Debrief (Based on Your Actual Answers)", expanded=True):
             st.markdown(f"**Problem Solving Feedback:** {sc.get('problem_solving_feedback', '')}")
             st.markdown(f"**Commercial Acumen Feedback:** {sc.get('commercial_feedback', '')}")
             st.markdown(f"**Channel Intuition Feedback:** {sc.get('channel_feedback', '')}")
