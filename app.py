@@ -18,29 +18,77 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Direct HTTPS call with multi-model fallback (Gemini 2.0 / 2.5 Flash)
+# Dynamically discover which model is enabled for this API key
+def get_active_gemini_model(api_key):
+    if not api_key:
+        return None, "No API key provided."
+    clean_key = api_key.strip()
+    list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={clean_key}"
+    try:
+        req = urllib.request.Request(list_url)
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            models = data.get("models", [])
+            # Priority: find flash models supporting generateContent
+            for m in models:
+                methods = m.get("supportedGenerationMethods", [])
+                name = m.get("name", "")
+                if "generateContent" in methods and "flash" in name.lower():
+                    return name.replace("models/", ""), None
+            # Fallback: any model supporting generateContent
+            for m in models:
+                methods = m.get("supportedGenerationMethods", [])
+                name = m.get("name", "")
+                if "generateContent" in methods:
+                    return name.replace("models/", ""), None
+            return None, "No models with generateContent support found on this API key."
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8")
+        try:
+            err_json = json.loads(err_body)
+            return None, err_json.get("error", {}).get("message", f"HTTP {e.code}: {e.reason}")
+        except Exception:
+            return None, f"HTTP Error {e.code}: {e.reason}"
+    except Exception as e:
+        return None, str(e)
+
+# Direct HTTPS call to Gemini REST API using the discovered model
 def query_gemini(api_key, prompt):
     if not api_key:
         return None, "No API key provided."
     
-    candidate_models = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash-latest"]
-    headers = {"Content-Type": "application/json"}
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.7,
-            "maxOutputTokens": 800
-        }
-    }
+    clean_key = api_key.strip()
+    
+    # Discover model dynamically if not cached in session
+    if "cached_gemini_model" not in st.session_state or not st.session_state.cached_gemini_model:
+        model_name, err = get_active_gemini_model(clean_key)
+        if err or not model_name:
+            model_name = "gemini-2.0-flash"
+        st.session_state.cached_gemini_model = model_name
+    
+    selected_model = st.session_state.cached_gemini_model
+    
+    candidate_models = [selected_model, "gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash", "gemini-pro"]
+    seen = set()
+    unique_candidates = [x for x in candidate_models if not (x in seen or seen.add(x))]
     
     last_err = None
-    for model_name in candidate_models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key.strip()}"
+    for m_name in unique_candidates:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={clean_key}"
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.7,
+                "maxOutputTokens": 800
+            }
+        }
         req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=25) as response:
                 res_json = json.loads(response.read().decode("utf-8"))
                 text = res_json["candidates"][0]["content"]["parts"][0]["text"]
+                st.session_state.cached_gemini_model = m_name
                 return text, None
         except urllib.error.HTTPError as e:
             err_msg = e.read().decode("utf-8")
@@ -189,9 +237,10 @@ api_key = st.sidebar.text_input("Gemini API Key", value=secret_key, type="passwo
 if api_key:
     clean_k = api_key.strip()
     if len(clean_k) < 35:
-        st.sidebar.warning(f"⚠️ Key is {len(clean_k)} chars. Google keys are usually 39 chars. Double-check copy-paste!")
+        st.sidebar.warning(f"⚠️ Key is {len(clean_k)} chars. Google keys are usually 39 chars.")
     else:
-        st.sidebar.success("⚡ Live AI Ready")
+        cached_m = st.session_state.get("cached_gemini_model", "Auto-Discovering")
+        st.sidebar.success(f"⚡ Live AI Active ({cached_m})")
 else:
     st.sidebar.warning("⚠️ Enter API key to activate live cross-examination")
 
