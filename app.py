@@ -18,12 +18,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Direct HTTPS call to Gemini REST API
-def query_gemini(api_key, prompt, model_name="gemini-1.5-flash"):
+# Direct HTTPS call with multi-model fallback (Gemini 2.0 / 2.5 Flash)
+def query_gemini(api_key, prompt):
     if not api_key:
         return None, "No API key provided."
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key.strip()}"
+    candidate_models = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash-latest"]
     headers = {"Content-Type": "application/json"}
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -33,21 +33,31 @@ def query_gemini(api_key, prompt, model_name="gemini-1.5-flash"):
         }
     }
     
-    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=25) as response:
-            res_json = json.loads(response.read().decode("utf-8"))
-            text = res_json["candidates"][0]["content"]["parts"][0]["text"]
-            return text, None
-    except urllib.error.HTTPError as e:
-        err_msg = e.read().decode("utf-8")
+    last_err = None
+    for model_name in candidate_models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key.strip()}"
+        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
         try:
-            err_json = json.loads(err_msg)
-            return None, err_json.get("error", {}).get("message", str(e))
-        except Exception:
-            return None, f"HTTP Error {e.code}: {e.reason}"
-    except Exception as e:
-        return None, str(e)
+            with urllib.request.urlopen(req, timeout=25) as response:
+                res_json = json.loads(response.read().decode("utf-8"))
+                text = res_json["candidates"][0]["content"]["parts"][0]["text"]
+                return text, None
+        except urllib.error.HTTPError as e:
+            err_msg = e.read().decode("utf-8")
+            try:
+                err_json = json.loads(err_msg)
+                last_err = err_json.get("error", {}).get("message", str(e))
+            except Exception:
+                last_err = f"HTTP Error {e.code}: {e.reason}"
+            if e.code == 404:
+                continue
+            else:
+                return None, last_err
+        except Exception as e:
+            last_err = str(e)
+            continue
+            
+    return None, last_err
 
 # Master Cases Database
 CASES = {
