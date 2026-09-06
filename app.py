@@ -18,7 +18,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Bulletproof HTTPS call testing v1 and v1beta across all active Google models
+# Bulletproof HTTPS call testing v1 and v1beta across Google models
 def query_gemini(api_key, prompt):
     if not api_key:
         return None, "No API key provided."
@@ -72,7 +72,52 @@ def query_gemini(api_key, prompt):
             
     return None, last_err
 
-# Fallback in-app heuristic evaluator if API is unavailable or returns an error
+# Guaranteed In-App Adaptive Cross-Examination Engine
+def get_guaranteed_cross_exam(panelist, question, answer, company):
+    ans_lower = answer.lower().strip()
+    words = ans_lower.split()
+    
+    # Check for short, deflected, or repetitive answers
+    if len(words) < 8 or any(w in ans_lower for w in ["repeat", "what", "pardon", "don't know", "idk", "huh"]):
+        return (
+            f"Ayan, in a final placement interview at {company}, asking to repeat or deflecting with a single-phrase answer "
+            "immediately raises a red flag with the panel. "
+            f"I specifically asked you: \"{question}\" "
+            "Take a deep breath, commit to a clear commercial stance, and give me a structured 3-part answer."
+        )
+    
+    # Domain-specific sharp pushback
+    role = panelist.get("role", "")
+    if "HR" in role or "Talent" in role:
+        return (
+            "Ayan, your answer sounds diplomatic, but you're evading the core friction. "
+            "When an acquired D2C brand's founder insists on an aggressive growth campaign that directly violates "
+            f"{company}'s corporate brand governance guidelines, do you back the founder's growth momentum or enforce corporate compliance? "
+            "Give me a definitive decision and defend the trade-off."
+        )
+    elif "Finance" in role or "Commercial" in role:
+        return (
+            "You addressed gross margins, but you completely glossed over working capital velocity. "
+            "In Modern Trade, payment cycles run 60 to 90 days, and supermarket chains demand heavy slotting allowances. "
+            "If your weekly off-take is below 4 units per store, your ROCE turns deeply negative. "
+            "How do you justify this working capital drag to the CFO?"
+        )
+    elif "Category" in role or "Brand" in role:
+        return (
+            "Your cohort segmentation sounds clean on a slide, but real consumers in retail aisles don't read brand decks. "
+            "If our clean-label premium product sits on the exact same shelf as our legacy mass-market SKU, "
+            "what prevents the consumer from buying the cheaper pack and cannibalizing our high-margin revenue? "
+            "Where is the physical point-of-sale barrier?"
+        )
+    else:  # Sales & Customer Development
+        return (
+            "Let's ground this in the field. An FMCG distributor in Kanpur or Indore operates on cash-flow turnover. "
+            "Parachute turns over in 4 days, while your premium health mix sits in their godown for 40 days. "
+            "Why should that distributor deploy their working capital and salesmen to push your slow-moving SKU? "
+            "What exact ROI parity are you offering them?"
+        )
+
+# Fallback heuristic evaluator if API is unavailable
 def evaluate_heuristically(history, company):
     candidate_answers = [h["text"] for h in history if h.get("role") == "candidate"]
     all_text = " ".join(candidate_answers).lower()
@@ -252,9 +297,9 @@ if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
 api_key = st.sidebar.text_input("Gemini API Key", value=secret_val, type="password", help="Enter key from Google AI Studio.")
 
 if api_key:
-    st.sidebar.success("⚡ Live AI Active")
+    st.sidebar.success("⚡ Live AI Ready")
 else:
-    st.sidebar.info("💡 Guided Mode Active (Add API key for live cross-examination)")
+    st.sidebar.info("💡 Guided Mode Active (Live AI optional)")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Case Repository")
@@ -327,48 +372,38 @@ if not active_session["completed"]:
             })
 
             if not active_session["awaiting_rebuttal"]:
+                # STAGE A: Cross-Examination Pushback
                 turn_data = current_case["turns"][cur_turn - 1]
                 panelist_data = current_case["panelists"][turn_data["panelist_idx"]]
                 
-                cross_exam_done = False
+                cross_pushback = None
                 if api_key:
                     with st.spinner(f"{panelist_data['name']} is evaluating your response..."):
                         prompt = f"""You are {panelist_data['name']}, {panelist_data['role']} at {current_case['company']} on a strict MICA placement panel.
 Question: "{turn_data['question']}"
 Candidate Answer: "{ans_clean}"
 In 2-3 sentences, identify one weak assumption or missing trade-off in his response and cross-examine him directly. Stay in character."""
-
                         reply, err = query_gemini(api_key, prompt)
                         if reply and not err:
-                            active_session["history"].append({
-                                "role": "panelist",
-                                "type": "cross_exam",
-                                "turn": cur_turn,
-                                "panelist": panelist_data["name"],
-                                "panelist_title": panelist_data["role"],
-                                "text": reply
-                            })
-                            active_session["awaiting_rebuttal"] = True
-                            cross_exam_done = True
+                            cross_pushback = reply
 
-                if not cross_exam_done:
-                    if cur_turn < len(current_case["turns"]):
-                        next_t = current_case["turns"][cur_turn]
-                        next_p = current_case["panelists"][next_t["panelist_idx"]]
-                        active_session["current_turn"] = cur_turn + 1
-                        active_session["history"].append({
-                            "role": "panelist",
-                            "type": "opening",
-                            "turn": cur_turn + 1,
-                            "panelist": next_p["name"],
-                            "panelist_title": next_p["role"],
-                            "text": next_t["question"]
-                        })
-                    else:
-                        active_session["completed"] = True
+                # Guaranteed Fallback Pushback if API is missing or fails
+                if not cross_pushback:
+                    cross_pushback = get_guaranteed_cross_exam(panelist_data, turn_data["question"], ans_clean, current_case["company"])
+
+                active_session["history"].append({
+                    "role": "panelist",
+                    "type": "cross_exam",
+                    "turn": cur_turn,
+                    "panelist": panelist_data["name"],
+                    "panelist_title": panelist_data["role"],
+                    "text": cross_pushback
+                })
+                active_session["awaiting_rebuttal"] = True
                 st.rerun()
 
             else:
+                # STAGE B: Candidate gave rebuttal, now advance to next turn!
                 active_session["awaiting_rebuttal"] = False
                 if cur_turn < len(current_case["turns"]):
                     next_t = current_case["turns"][cur_turn]
@@ -397,14 +432,14 @@ if active_session["completed"]:
 
     col_eval_btn, col_rst_btn = st.columns(2)
     with col_eval_btn:
-        trigger_eval = st.button("📊 Calculate Scorecard", type="primary", use_container_width=True)
+        trigger_eval = st.button("📊 Recalculate Scorecard", type="primary", use_container_width=True)
     with col_rst_btn:
-        if st.button("↺ Restart This Case", use_container_width=True):
+        if st.button("↺ Restart This Case (Back to Turn 1)", use_container_width=True):
             st.session_state.sessions_db[st.session_state.current_case_id] = None
             get_or_create_case_session(st.session_state.current_case_id)
             st.rerun()
 
-    # Dynamic Scoring with Intelligent Heuristic Fallback
+    # Dynamic Scoring with Guaranteed Evaluation
     if trigger_eval or active_session["dynamic_scorecard"] is None:
         sc_result = None
         if api_key:
@@ -440,7 +475,6 @@ Return ONLY a valid JSON object matching:
                     except Exception:
                         sc_result = None
 
-        # If API is missing or encounters any network/model issue, evaluate immediately using the built-in engine
         if not sc_result:
             sc_result = evaluate_heuristically(active_session["history"], current_case["company"])
         
