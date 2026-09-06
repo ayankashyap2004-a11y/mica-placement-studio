@@ -177,7 +177,11 @@ secret_key = st.secrets.get("GEMINI_API_KEY", "") if hasattr(st, "secrets") else
 api_key = st.sidebar.text_input("Gemini API Key", value=secret_key, type="password", help="Enter free API key from Google AI Studio (aistudio.google.com).")
 
 if api_key:
-    st.sidebar.success("⚡ Live AI Active")
+    clean_k = api_key.strip()
+    if len(clean_k) < 35:
+        st.sidebar.warning(f"⚠️ Key is {len(clean_k)} chars. Google keys are usually 39 chars. Double-check copy-paste!")
+    else:
+        st.sidebar.success("⚡ Live AI Ready")
 else:
     st.sidebar.warning("⚠️ Enter API key to activate live cross-examination")
 
@@ -190,7 +194,6 @@ for cid, cdata in CASES.items():
     if s_obj:
         status_str = "Completed" if s_obj["completed"] else f"Turn {s_obj['current_turn']}/5"
     
-    # Bulletproof full-width button
     if st.sidebar.button(f"{cdata['company']}  •  [{status_str}]", key=f"btn_{cid}", use_container_width=True):
         st.session_state.current_case_id = cid
         st.rerun()
@@ -283,7 +286,7 @@ Do NOT reveal the model answer. Challenge him directly now:"""
                             active_session["awaiting_rebuttal"] = True
                             cross_exam_done = True
                         elif err:
-                            st.error(f"Gemini API Error: {err}")
+                            st.error(f"Google Gemini Error: {err}")
 
                 if not cross_exam_done:
                     if cur_turn < len(current_case["turns"]):
@@ -327,17 +330,28 @@ Do NOT reveal the model answer. Challenge him directly now:"""
 
 # Dynamic Scorecard Generation
 if active_session["completed"]:
-    st.success("🎉 Interview Session Concluded! Evaluating your performance across the 40-point rubric.")
+    st.success("🎉 Interview Session Concluded!")
+    st.subheader("📊 Dynamic Placement Scorecard")
 
-    if active_session["dynamic_scorecard"] is None:
-        if api_key:
-            with st.spinner("Panel is deliberating and scoring your actual answers..."):
-                transcript = ""
-                for h in active_session["history"]:
-                    speaker = h.get("panelist", "Ayan Kashyap (Candidate)")
-                    transcript += f"[{speaker}]: {h['text']}\n\n"
+    # Action Buttons
+    col_eval_btn, col_rst_btn = st.columns(2)
+    with col_eval_btn:
+        trigger_eval = st.button("📊 Calculate / Refresh AI Scorecard", type="primary", use_container_width=True)
+    with col_rst_btn:
+        if st.button("↺ Restart This Case", use_container_width=True):
+            st.session_state.sessions_db[st.session_state.current_case_id] = None
+            get_or_create_case_session(st.session_state.current_case_id)
+            st.rerun()
 
-                eval_prompt = f"""You are the senior MICA placement interview panel evaluating candidate Ayan Kashyap for an FMCG/D2C Management Trainee role at {current_case['company']}.
+    # Trigger Evaluation
+    if trigger_eval or (active_session["dynamic_scorecard"] is None and api_key):
+        with st.spinner("Panel is deliberating and scoring your actual answers..."):
+            transcript = ""
+            for h in active_session["history"]:
+                speaker = h.get("panelist", "Ayan Kashyap (Candidate)")
+                transcript += f"[{speaker}]: {h['text']}\n\n"
+
+            eval_prompt = f"""You are the senior MICA placement interview panel evaluating candidate Ayan Kashyap for an FMCG/D2C Management Trainee role at {current_case['company']}.
 Here is the verbatim transcript of the candidate's actual answers during the interview:
 {transcript}
 
@@ -357,17 +371,17 @@ Return ONLY a valid JSON object matching this exact schema:
   "missed_tradeoffs": "...",
   "verdict": "Strong Hire / Hire / Borderline / Reject"
 }}"""
-                eval_res, err = query_gemini(api_key, eval_prompt)
-                if eval_res and not err:
-                    try:
-                        clean_json = eval_res.strip().replace("```json", "").replace("```", "")
-                        active_session["dynamic_scorecard"] = json.loads(clean_json)
-                    except Exception:
-                        active_session["dynamic_scorecard"] = None
+            eval_res, err = query_gemini(api_key, eval_prompt)
+            if err:
+                st.error(f"Google Gemini API Error: {err}")
+            elif eval_res:
+                try:
+                    clean_json = eval_res.strip().replace("```json", "").replace("```", "")
+                    active_session["dynamic_scorecard"] = json.loads(clean_json)
+                except Exception as ex:
+                    st.error(f"Failed to parse scorecard JSON: {ex}")
 
     sc = active_session["dynamic_scorecard"]
-    st.subheader("📊 Dynamic Placement Scorecard")
-
     if sc:
         total_score = sc.get("problem_solving", 0) + sc.get("commercial_acumen", 0) + sc.get("channel_intuition", 0) + sc.get("narrative_presence", 0)
         st.markdown(f"**Verdict:** `{sc.get('verdict', 'Evaluated')}` | **Total Score: {total_score:.1f} / 40.0**")
@@ -386,7 +400,7 @@ Return ONLY a valid JSON object matching this exact schema:
             st.markdown(f"**Executive Synthesis:** {sc.get('executive_synthesis', '')}")
             st.markdown(f"**Missed Trade-Offs:** {sc.get('missed_tradeoffs', '')}")
     else:
-        st.info("Dynamic scoring requires an active Gemini API key. Enter your key in the sidebar to generate an AI evaluation of your actual responses.")
+        st.info("Click 'Calculate / Refresh AI Scorecard' above to evaluate this session with your Gemini API key.")
 
     # Benchmark Model Answers
     st.markdown("### 📘 Turn-by-Turn Benchmark Model Answers")
@@ -396,8 +410,3 @@ Return ONLY a valid JSON object matching this exact schema:
         with st.expander(f"Turn {t['turn']} Benchmark | {p_name} ({p_role})", expanded=False):
             st.markdown(f"**Question:** *\"{t['question']}\"*")
             st.markdown(f"**Benchmark Model Answer:**\n{t['model_answer']}")
-
-    if st.button("↺ Restart This Case"):
-        st.session_state.sessions_db[st.session_state.current_case_id] = None
-        get_or_create_case_session(st.session_state.current_case_id)
-        st.rerun()
