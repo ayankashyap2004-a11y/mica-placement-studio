@@ -1,5 +1,7 @@
 import streamlit as st
 import os
+import csv
+import io
 import json
 import time
 import urllib.request
@@ -75,7 +77,7 @@ def query_gemini(api_key, prompt):
             
     return None, last_err
 
-# Robust transcript evaluator with triple-quoted strings (cannot break on line wraps)
+# Fallback transcript evaluator if Google experiences high demand
 def evaluate_transcript_locally(history, company):
     candidate_answers = [h["text"] for h in history if h.get("role") == "candidate"]
     all_text = " ".join(candidate_answers).lower().strip()
@@ -125,8 +127,8 @@ def evaluate_transcript_locally(history, company):
         "verdict": "Strong Hire" if (ps + ca + ci + np) >= 32 else "Hire"
     }
 
-# Master Cases Database
-CASES = {
+# Master Pre-Loaded Core Cases
+BUILTIN_CASES = {
     "marico-foods": {
         "company": "Marico Limited",
         "sector": "FMCG / Digital Brands",
@@ -214,12 +216,292 @@ CASES = {
                 "model_answer": """1. Bifurcated Pricing: Absorb 100 bps on core mass SKUs via factory yield optimization and de-gramming sachets by 4-5%; implement 6-7% price hike on premium/adult extensions where demand is inelastic."""
             }
         ]
+    },
+    "the-whole-truth": {
+        "company": "The Whole Truth Foods",
+        "sector": "Clean-Label D2C / Omnichannel",
+        "role": "Growth Marketing & Omnichannel Expansion Lead",
+        "context": """Scaling clean protein bars, functional chocolates, and muesli from 80% D2C/Q-Commerce into Modern Trade (Nature's Basket, Foodhall) and premium GT without diluting radical transparency equity.""",
+        "panelists": [
+            {"name": "Shashank Mehta", "role": "Founder & CEO", "focus": "Radical ingredient transparency, brand trust vs marketing gimmicks"},
+            {"name": "Varun Alagh", "role": "Board Advisor & Growth Mentor", "focus": "CAC efficiency, omnichannel gross margin sustainability"},
+            {"name": "Tanvi Sharma", "role": "Head of Retail & Modern Trade", "focus": "Slotting fees, expiry/returns, shelf off-take velocity"},
+            {"name": "Arjun Grover", "role": "VP – Performance & Digital", "focus": "Blended CAC, retention cohorts, Meta vs Q-Commerce spend"}
+        ],
+        "turns": [
+            {
+                "turn": 1,
+                "panelist_idx": 0,
+                "question": """Welcome, Ayan. Superyou built quick excitement with high-protein wafer bars. At The Whole Truth, our core moat is '100% clean, zero hidden additives, radical truth on the front of pack.' In an FMCG world where legacy giants can copy our ingredient claims with 10x our marketing budget, how do you sustain brand defensibility purely through consumer trust and community?""",
+                "model_answer": """1. Proof over Claim Moat: Publish third-party lab batch test reports on every single production lot via QR code.\n2. Educational Content Engine: Position the brand as an investigative health publisher rather than a packaged snack seller.\n3. Community Advocacy: Turn high-frequency customers into ambassadors through direct founder-led feedback loops."""
+            },
+            {
+                "turn": 2,
+                "panelist_idx": 1,
+                "question": """Our online CAC has inflated by 35% across Meta and Google over the last 12 months. Should we shift marketing budget heavily into Quick Commerce dark store promotions (Blinkit, Zepto, Instamart) or invest in physical Modern Trade shelf presence?""",
+                "model_answer": """1. Channel Funnel Dynamics: Quick Commerce dark stores convert high-intent, immediate-need impulse buyers with ~12-14% commission, lower than variable online CAC (~40%).\n2. Modern Trade for Billboarding: Use top 500 metro supermarkets strictly as brand credibility anchors, while directing primary reorder velocity to Quick Commerce dark stores."""
+            },
+            {
+                "turn": 3,
+                "panelist_idx": 2,
+                "question": """Modern Trade retail chains demand a 32% margin, 75-day credit terms, and a 100% buyback guarantee on unsold expired stock. Clean-label bars have a shorter shelf life (6 months) due to zero preservatives. How do you manage expiry write-offs?""",
+                "model_answer": """1. Batch-to-Store Precision: Implement daily secondary sales tracking via POS integration; only replenish 2 weeks of inventory per store beat.\n2. Dynamic Clearance: Trigger discount promotions on Quick Commerce dark stores 45 days before expiry to avoid physical stock returns."""
+            },
+            {
+                "turn": 4,
+                "panelist_idx": 3,
+                "question": """What is your exact cohort retention framework to determine whether a newly acquired customer on our D2C website is profitable over a 12-month horizon?""",
+                "model_answer": """1. 60-Day Repeat Benchmark: Category healthy repeat is 28%+. If 60-day repeat is below 20%, paid acquisition must be paused.\n2. LTV/CAC Ratio: Calculate contribution margin after fulfillment (CM2) multiplied by 12-month orders. Must exceed 3.2x CAC to justify paid ad spend."""
+            },
+            {
+                "turn": 5,
+                "panelist_idx": 0,
+                "question": """Final question: If a prominent food influencer publicly claims that our bars contain more natural sugars than advertised, walk me through your crisis communication protocol within the first 6 hours.""",
+                "model_answer": """1. Radical Transparency Response: Do not send legal cease-and-desist notices. Immediately publish certified NABL laboratory test certificates for that exact batch within 2 hours.\n2. Open Invitation: Publicly invite the influencer to our manufacturing facility to sample and independently test any production lot on live video."""
+            }
+        ]
+    },
+    "tata-consumer": {
+        "company": "Tata Consumer Products",
+        "sector": "FMCG Conglomerate",
+        "role": "Management Trainee – Commercial & Brand Strategy",
+        "context": """NourishCo (Himalayan, Tata Gluco Plus), Soulfull (millets & wholesome snacking), and Tata Sampann staples. Challenging market leaders through high-trust health integration.""",
+        "panelists": [
+            {"name": "Siddharth Roy", "role": "Head of Strategy & M&A", "focus": "Portfolio synergies, brand integration, ROCE"},
+            {"name": "Meera Swaminathan", "role": "Category Lead – Health & Millets", "focus": "Millet mainstreaming, urban vs semi-urban adoption"},
+            {"name": "Karan Malhotra", "role": "Commercial Finance Director", "focus": "Distribution beat density, gross margin expansion"},
+            {"name": "Ananya Joshi", "role": "HR & Leadership Talent", "focus": "Tata values, long-term stakeholder stewardship"}
+        ],
+        "turns": [
+            {
+                "turn": 1,
+                "panelist_idx": 0,
+                "question": """Welcome, Ayan. Tata Consumer has acquired fast-growing niche brands like Soulfull to spearhead the 'International Year of Millets' health narrative. How do you prevent Soulfull from remaining a niche Tier-1 metro product and transform it into a mass-market household habit across Bharat?""",
+                "model_answer": """1. Low Unit Price Points: Introduce ₹10 and ₹20 single-serve snack packs into General Trade to lower the trial barrier for semi-urban families.\n2. Taste-First Framing: Position on indulgence ('Choco Ragi Bites') rather than medicinal health, making it an easy breakfast swap for mothers.\n3. Tata Trust Endorsement: Leverage the 'Tata Soulfull' co-branded logo to overcome consumer skepticism on quality and purity."""
+            },
+            {
+                "turn": 2,
+                "panelist_idx": 1,
+                "question": """NourishCo's Tata Gluco Plus has seen tremendous success in rural and semi-urban pockets at ₹10 cup format. What is your strategy to scale this beverage into urban modern trade and quick commerce without killing its rural distribution profitability?""",
+                "model_answer": """1. Differentiated Pack Format: Keep the ₹10 plastic cup exclusive to traditional kiranas and rural road transport beats; launch a premium 250ml sleek can/PET bottle at ₹35 for urban quick commerce and gyms.\n2. Functional Positioning: Position the urban pack as an electrolyte recovery beverage competing with sports drinks."""
+            },
+            {
+                "turn": 3,
+                "panelist_idx": 2,
+                "question": """Tata Sampann unpolished pulses and spices carry a 15-20% price premium over loose unbranded commodity staples in kiranas. How do you convince traditional consumers to make the switch?""",
+                "model_answer": """1. Economic Value Demonstration: Show that unpolished pulses yield 12% higher protein by weight and retain natural oils, meaning fewer cups needed per meal.\n2. Retailer Margin Parity: Offer kiranas a higher rupee cash margin per kilogram compared to unbranded loose grain sales."""
+            },
+            {
+                "turn": 4,
+                "panelist_idx": 3,
+                "question": """How does your background in Economics help you evaluate the trade-off between volume growth and operating margin in FMCG staples?""",
+                "model_answer": """1. Volume-Margin Trade-Off: In staples, high velocity builds distribution barrier to entry and working capital leverage across mills.\n2. Price Discrimination: Protect baseline commodity margins with volume; capture consumer surplus through premium value-added value-tier extensions (organic, single-origin)."""
+            },
+            {
+                "turn": 5,
+                "panelist_idx": 0,
+                "question": """Walk us through a scenario where ethical Tata brand guidelines conflict with a high-margin commercial opportunity.""",
+                "model_answer": """1. Ethical Governance Primacy: Tata brand equity has taken 150+ years to build; short-term high margin gains from misleading health claims destroy long-term enterprise value.\n2. Value-First Alternative: Re-engineer the formulation to meet genuine health standards or walk away from the category."""
+            }
+        ]
+    },
+    "nestle-nutrition": {
+        "company": "Nestlé India",
+        "sector": "Nutrition & Specialized Health",
+        "role": "Brand Manager – Specialized Nutrition & Dairy",
+        "context": """Navigating urban clean-label scrutiny, specialized health nutrition (Resource, Optifast, Ceregrow), and expanding pediatric-to-adult wellness credibility across pharmacies and e-commerce.""",
+        "panelists": [
+            {"name": "Dr. Arindam Bose", "role": "Medical & Scientific Affairs Director", "focus": "Clinical validation, pediatric regulatory compliance, HCP engagement"},
+            {"name": "Sunaina Kashyap", "role": "Head of Commercial Finance", "focus": "Hospital supply contracts, pharmacy trade terms, gross margins"},
+            {"name": "Gaurav Sen", "role": "Category Business Lead – Nutrition", "focus": "Clean-label challenger defense, D2C health drink positioning"},
+            {"name": "Kavita Rao", "role": "Head of People & Culture", "focus": "Nestlé nutrition governance, ethical marketing compliance"}
+        ],
+        "turns": [
+            {
+                "turn": 1,
+                "panelist_idx": 0,
+                "question": """Welcome, Ayan. In recent times, packaged food multinationals have faced severe media and regulatory scrutiny regarding added sugars in kids' breakfast cereals and milk drinks in emerging markets. How do you reformulate and reposition a legacy pediatric brand to achieve 'zero-refined-sugar' credibility without alienating mass consumers who prioritize familiar taste?""",
+                "model_answer": """1. Stepped Reformulation: Transition sugar levels downward across 3 production runs (15% per quarter) using natural fruit powders and grain malts to prevent taste shock.\n2. Clinical Transparency: Publish clinical glycemic response studies co-authored with pediatric nutritional bodies.\n3. Transparent Front-of-Pack: Clearly distinguish between naturally occurring lactose and sucrose."""
+            },
+            {
+                "turn": 2,
+                "panelist_idx": 1,
+                "question": """Adult clinical nutrition products like Resource and Optifast deliver 55% gross margins in hospital procurement, but retail pharmacy expansion is hindered by chemists demanding 25% margins and slow shelf velocity. How do you structure trade credit and doctor prescription pull to make pharmacy distribution viable?""",
+                "model_answer": """1. Medical Detailing Pull: Deploy medical representatives to top orthopedic and oncology clinics to drive prescription off-take, reducing chemist inventory holding risk.\n2. Hub-and-Spoke Stocking: Partner with top institutional pharmacy chains (Apollo, MedPlus) on consignment inventory with 30-day replenishment rather than outright cash purchase."""
+            },
+            {
+                "turn": 3,
+                "panelist_idx": 2,
+                "question": """New-age D2C clean-label kids health mix brands are aggressively advertising on Instagram that MNC health drinks are '70% sugar disguised as health.' What is your counter-positioning strategy?""",
+                "model_answer": """1. Evidence vs Hype: Contrast cottage-industry batch inconsistencies with Nestlé's 150-point safety and heavy-metal testing protocols.\n2. High-Trust Doctor Advocacy: Host pediatric masterclasses highlighting micronutrient bio-availability (iron chelate vs unrefined whole grains).\n3. Clean Sub-Line: Launch an endorsed clean-label extension under the trusted umbrella brand."""
+            },
+            {
+                "turn": 4,
+                "panelist_idx": 3,
+                "question": """Walk us through how you uphold the WHO International Code of Marketing of Breast-milk Substitutes while meeting aggressive corporate volume growth targets in infant nutrition.""",
+                "model_answer": """1. Strict WHO Code Compliance: Zero consumer-facing promotion or discount incentives on infant formula (0-6 months); marketing is strictly restricted to scientific product monographs for healthcare professionals.\n2. Growth Diversification: Channel growth targets into toddler nutrition (12+ months), maternal wellness, and adult clinical nutrition portfolios."""
+            },
+            {
+                "turn": 5,
+                "panelist_idx": 0,
+                "question": """How does an Economics degree help you price specialized medical nutrition products when government price caps (DPCO) threaten contribution margins?""",
+                "model_answer": """1. Value-Based Segmentation: Under price caps, optimize supply chain throughput and packaging sizes to protect nominal margins; launch premium clinical variants with patented delivery mechanisms outside the DPCO schedule.\n2. Cross-Subsidization: Use high-margin institutional hospital contracts to support affordable access tiers in semi-urban healthcare centers."""
+            }
+        ]
+    },
+    "itc-foods": {
+        "company": "ITC Limited",
+        "sector": "FMCG Conglomerate / Multi-Category",
+        "role": "Management Trainee – Brand Management & Trade Strategy",
+        "context": """Foods Business (Aashirvaad, Sunfeast Dark Fantasy, Bingo!) and scaling healthy snacking through acquired brands like Yoga Bar across ITC's 7 million retail outlet reach.""",
+        "panelists": [
+            {"name": "Vikram Khurana", "role": "Executive VP – Branded Packaged Foods", "focus": "Backward integration (e-Choupal), commodity hedging, supply chain moats"},
+            {"name": "Ananya Mukherjee", "role": "Commercial Finance Controller", "focus": "FMCG EBIT margin expansion, ad spend ROI, distributor economics"},
+            {"name": "Rohan Deshmukh", "role": "Category Head – Biscuits & Snacking", "focus": "Sunfeast indulgence vs health, cannibalization, packaging innovation"},
+            {"name": "Pooja Singhania", "role": "Head of Campus Talent & HR", "focus": "ITC leadership philosophy, cross-business mobility, FMCG sustainability"}
+        ],
+        "turns": [
+            {
+                "turn": 1,
+                "panelist_idx": 0,
+                "question": """Welcome, Ayan. ITC acquired Yoga Bar to establish a strong beachhead in the fast-growing clean-label health food segment. Aashirvaad and Sunfeast have built an unassailable distribution moat reaching over 7 million retail outlets, powered by e-Choupal agricultural sourcing. How do you scale Yoga Bar into mass General Trade without losing the brand's premium D2C cult appeal?""",
+                "model_answer": """1. 2-Tier Product Portfolio: Retain premium nut-rich bars (₹60-120) exclusively in Modern Trade, Q-Commerce, and top 50,000 urban high-street kiranas; introduce accessible oat-based health snacks at ₹15-20 for Tier-2 General Trade.\n2. Sourcing Synergies: Leverage e-Choupal for direct farm procurement of millets, oats, and seeds, driving COGS down by 18% while maintaining premium quality.\n3. Independent Brand Identity: Keep the energetic, playful Yoga Bar voice independent from ITC's corporate identity."""
+            },
+            {
+                "turn": 2,
+                "panelist_idx": 1,
+                "question": """ITC's FMCG business has been expanding EBIT margins steadily towards double digits. When scaling a new high-protein snacking SKU, how do you balance the aggressive trade discounts needed to displace incumbent chocolate and biscuit brands with ITC's mandate for operating margin expansion?""",
+                "model_answer": """1. Rupee Gross Margin Demonstration: Show the retailer that a 15% margin on a ₹40 health bar yields ₹6 cash profit, compared to 10% on a ₹10 glucose biscuit yielding only ₹1.\n2. Secondary Replenishment Incentive: Tie distributor trade payouts to consumer off-take rather than upfront inventory push, preventing expired stock write-offs."""
+            },
+            {
+                "turn": 3,
+                "panelist_idx": 2,
+                "question": """Sunfeast Dark Fantasy owns the premium chocolate indulgence space. If we launch a 'Dark Fantasy Protein Cookie' under the same umbrella, how do you manage the consumer mental friction between pure indulgence and healthy nutrition?""",
+                "model_answer": """1. Guilt-Free Indulgence Positioning: Position the SKU as 'Smart Indulgence'—delivering the exact same molten choco-lava center but fortified with 8g whey protein and zero maida.\n2. Packaging Distinctions: Maintain the signature Dark Fantasy black-and-gold aesthetic while adding prominent matte-finish nutritional call-outs on front of pack."""
+            },
+            {
+                "turn": 4,
+                "panelist_idx": 3,
+                "question": """Quick commerce dark stores in metros are demanding 22-26% margins and prioritizing house brands. How does ITC leverage its massive multi-category portfolio (Foods, Personal Care, Agarbattis) to negotiate stronger commercial terms with Blinkit and Zepto?""",
+                "model_answer": """1. Unified Basket Leverage: Bundle high-velocity staples (Aashirvaad Atta, YiPPee! Noodles) with premium snacking, making full-basket availability conditional on favorable margin tiering.\n2. Category Captaincy: Offer algorithmic supply chain integration and dark-store replenishment priority in exchange for preferred shelf algorithms and banner placements."""
+            },
+            {
+                "turn": 5,
+                "panelist_idx": 0,
+                "question": """Final turn: How does your economics training help you navigate agricultural commodity price volatility (wheat, palm oil, cocoa) when defending FMCG gross margins?""",
+                "model_answer": """1. Dual-Pronged Hedging: Combine forward commodity purchasing contracts via e-Choupal with recipe optimization (adjusting fat blends within FSSAI standards).\n2. Pack-Size Engineering: Apply shrinkflation (de-gramming) on coin-barrier price points (₹5 & ₹10) while passing on absolute price adjustments to family packs where price elasticity is low."""
+            }
+        ]
+    },
+    "dabur-healthcare": {
+        "company": "Dabur India Limited",
+        "sector": "Consumer Healthcare & FMCG",
+        "role": "Management Trainee – Brand Management & D2C Growth",
+        "context": """Modernizing Ayurvedic staples (Chyawanprash, Real Juices, Badam Tail) for Gen-Z and scaling Quick Commerce dark stores without cannibalizing General Trade chemist beats.""",
+        "panelists": [
+            {"name": "Natasha Kapoor", "role": "Campus Talent Lead (HR)", "focus": "Ayurvedic heritage, corporate adaptability, brand stewardship"},
+            {"name": "Aditya Bhasin", "role": "Commercial Finance Controller", "focus": "Chemist margins, wholesale working capital, trade terms"},
+            {"name": "Priya Ramanathan", "role": "Category Head – Consumer Health", "focus": "Youth cohort recruitment, modern format extensions"},
+            {"name": "Rajesh Nair", "role": "EVP – Customer Development", "focus": "Quick Commerce dark stores vs traditional chemist distribution"}
+        ],
+        "turns": [
+            {
+                "turn": 1,
+                "panelist_idx": 0,
+                "question": """Welcome, Ayan. Dabur is India's most trusted 140-year-old Ayurvedic and consumer healthcare major, but faces aggressive competition from new-age D2C wellness brands (Kapiva, Plix, The Whole Truth) who market Ayurvedic efficacy with modern packaging and heavy performance ad spends. With your experience in growth marketing at Superyou and an economics foundation, how do you modernize the positioning of Dabur Chyawanprash and Badam Tail to recruit younger urban Gen-Z/millennial cohorts without alienating our core 40+ multi-generational family consumer base in North and Central India?""",
+                "model_answer": """1. 2-Tier Brand Architecture: Retain traditional amber glass jars for mass GT family purchase; launch sleek on-the-go gummies, single-serve shots, and travel sachets for urban Q-Commerce.\n2. Clinical Proof & Transparency: Back ancient Ayurvedic claims with published clinical trial data and modern macronutrient transparency.\n3. Digital Community Recruitment: Run active lifestyle positioning rather than winter-illness treatment framing."""
+            }
+        ]
+    },
+    "britannia-biscuits": {
+        "company": "Britannia Industries Limited",
+        "sector": "Packaged Foods & Dairy",
+        "role": "Management Trainee – Category Marketing & Snacking (BRITE)",
+        "context": """Defending Good Day and Marie Gold volume moats against regional biscuit challengers, while scaling premium sourdough, functional snacking, and Q-Commerce impulse packs.""",
+        "panelists": [
+            {"name": "Natasha Kapoor", "role": "Campus Talent Lead (HR)", "focus": "FMCG sales discipline, rural immersion readiness, culture fit"},
+            {"name": "Aditya Bhasin", "role": "Commercial Finance Controller", "focus": "Wheat flour & palm oil commodity inflation hedging, margin per square inch"},
+            {"name": "Priya Ramanathan", "role": "Category Head – Premium Snacking", "focus": "Brand architecture, health vs indulgence, modern trade promotions"},
+            {"name": "Rajesh Nair", "role": "EVP – Customer Development", "focus": "Direct retail distribution reach across 6.5M outlets, wholesale credit terms"}
+        ],
+        "turns": [
+            {
+                "turn": 1,
+                "panelist_idx": 0,
+                "question": """Welcome, Ayan. Britannia reaches millions of households every day through iconic mass-market power brands like Good Day, 50-50, and Marie Gold. However, low-tier regional competitors are discounting heavily in rural and semi-urban wholesale markets, while high-end D2C and artisanal bakeries are capturing urban metro snacking. Given your background in economics and growth marketing at Superyou, how do you defend our core volume market share while establishing a credible premium snacking pillar that delivers higher operating margins?""",
+                "model_answer": """1. Protect the Fortress: Use pricing corridors and pack de-gramming on core volume drivers (Good Day, Marie) to protect absolute price points at ₹5, ₹10, and ₹30.\n2. Premium Margin Expansion: Seed functional, clean-ingredient snacking extensions (sourdough crackers, high-fiber biscuits) in Modern Trade and Quick Commerce at ₹75+ to capture high-margin affluent demand.\n3. Direct Beat Density: Leverage Britannia's 6.5M retail outlet distribution to execute secondary replenishment priority over regional wholesalers."""
+            }
+        ]
     }
 }
 
-# Session State Persistence
+# Live Sync: Automatically pull and merge cases from the Google Sheet
+SHEET_ID = "1BscOiz1pgLbaBaxmDAIH_6uazeGWlDCmdW8uak-WVMA"
+
+@st.cache_data(ttl=60)
+def fetch_cases_from_google_sheet():
+    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            content = resp.read().decode("utf-8")
+            reader = csv.DictReader(io.StringIO(content))
+            sheet_cases = {}
+            for r in reader:
+                cid = r.get("Case ID", "").strip()
+                cname = r.get("Company Name", "").strip()
+                if cid and cname:
+                    sheet_cases[cid] = {
+                        "company": cname,
+                        "sector": r.get("Sector", "FMCG / Digital").strip(),
+                        "role": r.get("Role", "Management Trainee").strip(),
+                        "context": r.get("Strategic Context", "").strip(),
+                        "date_added": r.get("Date Added", "").strip(),
+                        "status": r.get("Status", "Live on Web").strip()
+                    }
+            return sheet_cases, None
+    except Exception as ex:
+        return {}, str(ex)
+
+# Merge live cases from Google Sheet with built-in master cases
+live_sheet_data, sheet_err = fetch_cases_from_google_sheet()
+CASES = dict(BUILTIN_CASES)
+
+for sc_id, sc_info in live_sheet_data.items():
+    if sc_id not in CASES:
+        CASES[sc_id] = {
+            "company": sc_info["company"],
+            "sector": sc_info["sector"],
+            "role": sc_info["role"],
+            "context": sc_info["context"],
+            "panelists": [
+                {"name": "Natasha Kapoor", "role": "Campus Talent Lead (HR)", "focus": "Culture fit, economics narrative, leadership potential"},
+                {"name": "Aditya Bhasin", "role": "Commercial Finance Controller", "focus": "ROCE, contribution margins, distribution P&L"},
+                {"name": "Priya Ramanathan", "role": "Category Head", "focus": "Brand positioning, cohort differentiation, market sizing"},
+                {"name": "Rajesh Nair", "role": "EVP – Customer Development", "focus": "General Trade, Modern Trade, Quick Commerce channel conflict"}
+            ],
+            "turns": [
+                {
+                    "turn": 1,
+                    "panelist_idx": 0,
+                    "question": f"""Welcome, Ayan. Walk us through how your background in Economics and D2C marketing at Superyou equips you to solve the strategic growth challenges for {sc_info['company']} in this role: {sc_info['role']}?""",
+                    "model_answer": """1. Economics to Commercial Strategy: Formulate a clear hypothesis connecting consumer utility and price elasticity to brand growth.\n2. Actionable Trade-Offs: Reconcile digital performance sprints with traditional FMCG distribution moats."""
+                }
+            ]
+        }
+
+# Auto-detect case from URL query parameters (e.g. ?case=britannia-biscuits)
+url_params = st.query_params
+url_case = url_params.get("case", None)
+
 if "current_case_id" not in st.session_state:
-    st.session_state.current_case_id = "marico-foods"
+    if url_case and url_case in CASES:
+        st.session_state.current_case_id = url_case
+    else:
+        st.session_state.current_case_id = "marico-foods"
+
+if url_case and url_case in CASES and st.session_state.current_case_id != url_case:
+    st.session_state.current_case_id = url_case
 
 if "sessions_db" not in st.session_state:
     st.session_state.sessions_db = {}
@@ -262,7 +544,13 @@ else:
     st.sidebar.warning("⚠️ Enter Gemini API Key to enable live interview panel")
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("Case Repository")
+st.sidebar.subheader("Live Case Repository")
+
+# Status badge for Google Sheet connection
+if live_sheet_data:
+    st.sidebar.caption(f"🟢 Connected to Google Sheet ({len(CASES)} cases live)")
+else:
+    st.sidebar.caption("💡 Serving core offline repository")
 
 for cid, cdata in CASES.items():
     s_obj = st.session_state.sessions_db.get(cid)
@@ -270,9 +558,20 @@ for cid, cdata in CASES.items():
     if s_obj:
         status_str = "Completed" if s_obj["completed"] else f"Turn {s_obj['current_turn']}/5"
     
-    if st.sidebar.button(f"{cdata['company']}  •  [{status_str}]", key=f"btn_{cid}", use_container_width=True):
+    btn_label = f"{cdata['company']}  •  [{status_str}]"
+    if st.sidebar.button(btn_label, key=f"btn_{cid}", use_container_width=True):
         st.session_state.current_case_id = cid
+        st.query_params["case"] = cid
         st.rerun()
+
+st.sidebar.markdown("---")
+col_sync, col_db = st.sidebar.columns(2)
+with col_sync:
+    if st.button("🔄 Sync Sheet", use_container_width=True, help="Pulls newly appended rows from your Google Sheet live"):
+        st.cache_data.clear()
+        st.rerun()
+with col_db:
+    st.markdown(f"[📊 Open Sheet](https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit)")
 
 current_case = CASES[st.session_state.current_case_id]
 active_session = get_or_create_case_session(st.session_state.current_case_id)
@@ -333,7 +632,8 @@ if not active_session["completed"]:
 
             if not active_session["awaiting_rebuttal"]:
                 # Pure AI Cross-Examination
-                turn_data = current_case["turns"][cur_turn - 1]
+                turn_idx = min(cur_turn - 1, len(current_case["turns"]) - 1)
+                turn_data = current_case["turns"][turn_idx]
                 panelist_data = current_case["panelists"][turn_data["panelist_idx"]]
                 
                 prompt = f"""You are roleplaying as {panelist_data['name']}, {panelist_data['role']} at {current_case['company']} on a strict, realistic MICA final placement interview panel for candidate Ayan Kashyap (BSc Economics, Superyou D2C growth internship).
@@ -474,3 +774,12 @@ Return ONLY a valid JSON object matching this exact schema:
         with st.expander(f"Turn {t['turn']} Benchmark | {p_name} ({p_role})", expanded=False):
             st.markdown(f"**Question:** *\"{t['question']}\"*")
             st.markdown(f"**Benchmark Model Answer:**\n{t['model_answer']}")
+'''
+
+with open('/working_dir/c_0de9184c98ec61b6/app.py', 'w') as f:
+    f.write(code)
+
+py_compile.compile('/working_dir/c_0de9184c98ec61b6/app.py', doraise=True)
+print("Updated app.py verified.")
+EOF
+python3 /working_dir/c_0de9184c98ec61b6/generate_bulletproof_sheet_app.py
