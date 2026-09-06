@@ -10,6 +10,13 @@ st.set_page_config(
     layout="wide"
 )
 
+# ==========================================
+# OPTION TO HARDCODE YOUR API KEY HERE:
+# Paste your 39-character key between the quotes if you want it always connected.
+# Example: HARDCODED_API_KEY = "AIzaSy..."
+# ==========================================
+
+
 # Custom Styling
 st.markdown("""
 <style>
@@ -18,77 +25,45 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Dynamically discover which model is enabled for this API key
-def get_active_gemini_model(api_key):
-    if not api_key:
-        return None, "No API key provided."
-    clean_key = api_key.strip()
-    list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={clean_key}"
-    try:
-        req = urllib.request.Request(list_url)
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            models = data.get("models", [])
-            # Priority: find flash models supporting generateContent
-            for m in models:
-                methods = m.get("supportedGenerationMethods", [])
-                name = m.get("name", "")
-                if "generateContent" in methods and "flash" in name.lower():
-                    return name.replace("models/", ""), None
-            # Fallback: any model supporting generateContent
-            for m in models:
-                methods = m.get("supportedGenerationMethods", [])
-                name = m.get("name", "")
-                if "generateContent" in methods:
-                    return name.replace("models/", ""), None
-            return None, "No models with generateContent support found on this API key."
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8")
-        try:
-            err_json = json.loads(err_body)
-            return None, err_json.get("error", {}).get("message", f"HTTP {e.code}: {e.reason}")
-        except Exception:
-            return None, f"HTTP Error {e.code}: {e.reason}"
-    except Exception as e:
-        return None, str(e)
-
-# Direct HTTPS call to Gemini REST API using the discovered model
+# Bulletproof HTTPS call testing both v1 (GA) and v1beta (Beta) with all active models
 def query_gemini(api_key, prompt):
     if not api_key:
         return None, "No API key provided."
     
     clean_key = api_key.strip()
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": clean_key
+    }
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 800
+        }
+    }
+    data = json.dumps(payload).encode("utf-8")
     
-    # Discover model dynamically if not cached in session
-    if "cached_gemini_model" not in st.session_state or not st.session_state.cached_gemini_model:
-        model_name, err = get_active_gemini_model(clean_key)
-        if err or not model_name:
-            model_name = "gemini-2.0-flash"
-        st.session_state.cached_gemini_model = model_name
-    
-    selected_model = st.session_state.cached_gemini_model
-    
-    candidate_models = [selected_model, "gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash", "gemini-pro"]
-    seen = set()
-    unique_candidates = [x for x in candidate_models if not (x in seen or seen.add(x))]
+    # Sequence testing both GA (v1) and Beta (v1beta) across standard models
+    attempts = [
+        ("v1beta", "gemini-2.0-flash"),
+        ("v1", "gemini-2.0-flash"),
+        ("v1beta", "gemini-2.5-flash"),
+        ("v1", "gemini-1.5-flash"),
+        ("v1beta", "gemini-1.5-flash"),
+        ("v1", "gemini-1.5-pro"),
+        ("v1beta", "gemini-pro")
+    ]
     
     last_err = None
-    for m_name in unique_candidates:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={clean_key}"
-        headers = {"Content-Type": "application/json"}
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.7,
-                "maxOutputTokens": 800
-            }
-        }
-        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
+    for api_ver, model_name in attempts:
+        url = f"https://generativelanguage.googleapis.com/{api_ver}/models/{model_name}:generateContent?key={clean_key}"
+        req = urllib.request.Request(url, data=data, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=25) as response:
+            with urllib.request.urlopen(req, timeout=20) as response:
                 res_json = json.loads(response.read().decode("utf-8"))
                 text = res_json["candidates"][0]["content"]["parts"][0]["text"]
-                st.session_state.cached_gemini_model = m_name
+                st.session_state.connected_model = f"{api_ver}/{model_name}"
                 return text, None
         except urllib.error.HTTPError as e:
             err_msg = e.read().decode("utf-8")
@@ -227,22 +202,25 @@ def get_or_create_case_session(case_id):
         }
     return st.session_state.sessions_db[case_id]
 
+# Resolve API Key Priority: 1) Hardcoded, 2) Streamlit Secrets, 3) Sidebar Input
+resolved_key = HARDCODED_API_KEY.strip()
+if not resolved_key and hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
+    resolved_key = st.secrets["GEMINI_API_KEY"].strip()
+
 # Sidebar
 st.sidebar.title("🎯 MICA Studio")
 st.sidebar.caption("Executive Placement Interview Simulator")
 
-secret_key = st.secrets.get("GEMINI_API_KEY", "") if hasattr(st, "secrets") else ""
-api_key = st.sidebar.text_input("Gemini API Key", value=secret_key, type="password", help="Enter free API key from Google AI Studio (aistudio.google.com).")
-
-if api_key:
-    clean_k = api_key.strip()
-    if len(clean_k) < 35:
-        st.sidebar.warning(f"⚠️ Key is {len(clean_k)} chars. Google keys are usually 39 chars.")
-    else:
-        cached_m = st.session_state.get("cached_gemini_model", "Auto-Discovering")
-        st.sidebar.success(f"⚡ Live AI Active ({cached_m})")
+if resolved_key:
+    api_key = resolved_key
+    connected_info = st.session_state.get("connected_model", "Connected")
+    st.sidebar.success(f"⚡ Live AI Active ({connected_info})")
 else:
-    st.sidebar.warning("⚠️ Enter API key to activate live cross-examination")
+    api_key = st.sidebar.text_input("Gemini API Key", type="password", help="Enter key from Google AI Studio (aistudio.google.com).")
+    if api_key:
+        st.sidebar.success("⚡ Key Entered")
+    else:
+        st.sidebar.warning("⚠️ Enter key or hardcode in app.py")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Case Repository")
